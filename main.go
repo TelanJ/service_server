@@ -253,40 +253,45 @@ func handleCallbackFunc(c *oidc.Client) http.HandlerFunc {
         <a href="/resend?jwt=%s">Resend Verification Email</a>
 </body></html>`, claims, tok.Encode())
 		w.Write([]byte(s))
+		w.Write([]byte("<br>"))
 		w.Write([]byte("<a href='/service'>service</a>"))
 	}
 }
 
 func handleServiceFunc(c *oidc.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		url := "http://localhost:10001"
-		args := &service.Args{
+		code := r.URL.Query().Get("code")
+		if code == "" {
+			phttp.WriteError(w, http.StatusBadRequest, "code query param must be set")
+			return
+		}
+
+		tok, err := c.ExchangeAuthCode(code)
+		if err != nil {
+			phttp.WriteError(w, http.StatusBadRequest, fmt.Sprintf("unable to verify auth code with issuer: %v", err))
+			return
+		}
+
+		claims, err := tok.Claims()
+		if err != nil {
+			phttp.WriteError(w, http.StatusBadRequest, fmt.Sprintf("unable to construct claims: %v", err))
+			return
+		}
+		
+		client, err := rpc.DialHTTP("tcp", ":10001")
+		if err != nil {
+			log.Fatalf("Error in dialing. %s", err)
+		}
+		args := &test.Args{
 			Name: "jules",
-			ID: "11135271",
 		}
-		message, err := json.EncodeClientRequest("App.Greet", args)
+		var reply test.Reply
+		err = client.Call("Service.Greet", args, &reply)
 		if err != nil {
-			log.Fatalf("%s", err)
-		}
-		req, err := http.NewRequest("POST", url, bytes.NewBuffer(message))
-		if err != nil {
-			log.Fatalf("%s", err)
-		}
-		req.Header.Set("Content-Type", "application/json")
-		client := new(http.Client)
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Fatalf("Error in sending request to %s. %s", url, err)
-		}
-		defer resp.Body.Close()
-
-		var reply service.Result
-		err = json.DecodeClientResponse(resp.Body, &result)
-
-		if err != nil {
-			log.Fatalf("Couldn't decode response. %s", err)
+			log.Fatalf("error in service", err)
 		}
 
-		s := fmt.Sprintf("%d", reply)
+		s := fmt.Sprintf("%s", reply)
 		w.Write([]byte(s))
+	}
 }
